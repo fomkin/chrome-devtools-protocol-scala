@@ -103,11 +103,15 @@ object ProtocolGenerator {
       .unzip
 
     val allTypes = types ++ enumsInCommands.flatten ++ enumsInEvents.flatten
-    Model(domains.map(_.domain), allTypes, commands, events)
+    val domainsMetaMap = domains
+      .map { d =>
+        d.domain -> Model.Meta(description = d.description, d.experimental, d.deprecated)
+      }
+      .toMap
+    Model(domainsMetaMap, allTypes, commands, events)
   }
 
-  def renderModel(model: Model): Map[String, String] = {
-
+  def renderModel(model: Model, renaming: Renaming): Map[String, String] = {
     val typeIndex = model
       .types
       .map(t => (t.qname, t))
@@ -147,8 +151,8 @@ object ProtocolGenerator {
     }
 
     def renderTypeDecl(ns: String, td: Model.TypeDecl): String = td match {
-      case ref @ Model.TypeDecl.Ref(id) if usesJson(ns, ref) => s"${id.escape}[Json]"
-      case Model.TypeDecl.Ref(id) => id.escape
+      case ref @ Model.TypeDecl.Ref(id) if usesJson(ns, ref) => s"${id.escape(renaming.types)}[Json]"
+      case Model.TypeDecl.Ref(id) => id.escape(renaming.types)
       case Model.TypeDecl.Json => "Json"
       case Model.TypeDecl.Array(t) => s"Seq[${renderTypeDecl(ns, t)}]"
       case Model.TypeDecl.Primitive.String => "String"
@@ -156,20 +160,46 @@ object ProtocolGenerator {
       case Model.TypeDecl.Primitive.Number => "Double"
       case Model.TypeDecl.Primitive.Integer => "Int"
     }
-    def renderMeta(meta: Model.Meta) = {
+    def renderMeta(meta: Model.Meta, props: Seq[Model.Property], rets: Seq[Model.Property] = Nil) = {
+      val params = props.map(x => x.name -> x.meta).toMap
       val exp =
         if (meta.experimental) "\n * EXPERIMENTAL"
         else ""
       val dep =
         if (meta.deprecated) "\n@deprecated "
         else "\n"
+      val par = params.
+        map {
+          case (k, v) =>
+            val exp = if (v.experimental) "EXPERIMENTAL " else ""
+            val dep = if (v.experimental) "DEPRECATED " else ""
+            val des = v.description.fold("")(_.ident(r = " *   "))
+            s" * @param $k $dep$exp$des"
+        }
+        .mkString("\n")
+      val par2 = if (params.nonEmpty) s"\n$par" else ""
+      val ret = rets
+        .map { r =>
+          val v = r.meta
+          val exp = if (v.experimental) "EXPERIMENTAL " else ""
+          val dep = if (v.experimental) "DEPRECATED " else ""
+          val des = v.description.fold("")(_.ident(r = " *  "))
+          s"${r.name} -- $dep$exp$des"
+        }
+        .mkString("\n")
+
+      val ret2 = rets match {
+        case Seq() => ""
+        case Seq(i) => s"\n * @return $ret"
+        case _ => s"\n * @return (\n *   ${ret.ident(r = " *   ")}\n * )"
+      }
       meta.description match {
         case Some(s) =>
           s"""/**
-             | * ${s.ident(1, " * ")}$exp
+             | * ${s.ident(1, " * ")}$exp$par2$ret2
              | */$dep""".stripMargin
         case None if meta.experimental =>
-          s"""/**$exp
+          s"""/**$exp$par2$ret2
              | */$dep""".stripMargin
         case None =>
           ""
@@ -187,17 +217,17 @@ object ProtocolGenerator {
           val methods = commands
             .map { commandDef =>
               val argsList = commandDef.params
-                .map(p => s"${p.name.escape}: ${renderTypeDecl(domain, p.tpe)}")
+                .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe)}")
                 .mkString(", ")
               val returnsList = commandDef.returns match {
                 case Nil => "Unit"
                 case Seq(item) => renderTypeDecl(domain, item.tpe)
                 case xs => s"(${xs.map(_.tpe).map(renderTypeDecl(domain, _)).mkString(", ")})"
               }
-              val m = renderMeta(commandDef.meta)
-              s"${m}def ${commandDef.name.escape}($argsList): F[$returnsList]"
+              val m = renderMeta(commandDef.meta, commandDef.params, commandDef.returns)
+              s"${m}def ${commandDef.name.escape(renaming.commands)}($argsList): F[$returnsList]"
             }
-            .mkString("\n")
+            .mkString("\n \n")
           val types = typesByDomain
             .get(domain)
             .toSeq
@@ -205,47 +235,51 @@ object ProtocolGenerator {
             .map {
               case Model.TypeDef.Struct(ns, id, xs, meta) =>
                 val argsList = xs
-                  .map(p => s"${p.name.escape}: ${renderTypeDecl(domain, p.tpe)}")
+                  .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe)}")
                   .mkString(", ")
                 val typeParams =
                   if (usesJson(ns, xs.map(_.tpe):_*)) "[Json]"
                   else ""
-                s"case class $id$typeParams($argsList)"
+                val m = renderMeta(meta, xs)
+                s"${m}case class ${id.escape(renaming.types)}$typeParams($argsList)"
               case Model.TypeDef.Enum(ns, id, xs, meta) =>
                 val caseObjects = xs
                   .map(_.capitalize)
-                  .map(x => s"case object ${x.escape} extends ${id.escape}")
+                  .map(x => s"case object ${x.escape(renaming.properties)} extends ${id.escape(renaming.types)}")
                   .mkString("\n")
-                s"""sealed trait ${id.escape}
-                   |object ${id.escape} {
+                val m = renderMeta(meta, Nil)
+                s"""${m}sealed trait ${id.escape(renaming.types)}
+                   |object ${id.escape(renaming.types)} {
                    |  ${caseObjects.ident(1, "  ")}
-                   |}
-                   |""".stripMargin
+                   |}""".stripMargin
               case Model.TypeDef.Alias(ns, id, decl, meta) =>
-                s"type $id = ${renderTypeDecl(ns, decl)}"
+                val m = renderMeta(meta, Nil)
+                s"${m}type $id = ${renderTypeDecl(ns, decl)}"
             }
-            .mkString("\n")
+            .mkString("\n \n")
           val events = eventsByDomain
             .get(domain)
             .toSeq
             .flatten
             .map { eventDef =>
               val argsList = eventDef.params
-                .map(p => s"${p.name.escape}: ${renderTypeDecl(domain, p.tpe)}")
+                .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe)}")
                 .mkString(", ")
               val typeParams =
                 if (usesJson(eventDef.domain, eventDef.params.map(_.tpe):_*)) "[Json]"
                 else ""
-              s"case class ${eventDef.name.escape.capitalize}$typeParams($argsList) extends Event"
+              val m = renderMeta(eventDef.meta, eventDef.params)
+              s"${m}case class ${eventDef.name.escape(renaming.events).capitalize}$typeParams($argsList) extends Event"
             }
-            .mkString("\n")
-          domain -> s"""trait ${domain.escape}[F[_], Json] {
-                       |  import ${domain.escape}._
+            .mkString("\n \n")
+          val m = renderMeta(model.domains(domain), Nil)
+          domain -> s"""${m}trait ${domain.escape(renaming.domains)}[F[_], Json] {
+                       |  import ${domain.escape(renaming.domains)}._
                        |
                        |  ${methods.ident()}
                        |}
                        |
-                       |object ${domain.escape} {
+                       |object ${domain.escape(renaming.domains)} {
                        |  ${types.ident()}
                        |
                        |  sealed trait Event
@@ -256,19 +290,26 @@ object ProtocolGenerator {
       }
   }
 
+  case class Renaming(domains: Map[String, String] = Map.empty,
+                      properties: Map[String, String] = Map.empty,
+                      types: Map[String, String] = Map.empty,
+                      commands: Map[String, String] = Map.empty,
+                      events: Map[String, String] = Map.empty)
+
   implicit class StringOps(val s: String) extends AnyVal {
     def ident(n: Int = 1, r: String = "  "): String = {
       val nr = r * n
       val nnr = s"\n$nr"
       s.replaceAll("\n", nnr)
     }
-    def escape: String = s match {
+    def escape(mapping: Map[String, String] = Map.empty): String = s match {
       case "type" => "`type`"
       case "class" => "`class`"
       case "implicit" => "`implicit`"
       case "this" => "`this`"
       case "object" => "`object`"
       case "override" => "`override`"
+      case _ if mapping.contains(s) => mapping(s)
       case _ if s.contains("-") =>
         val x :: xs = s.split("-").toList
         x + xs.map(_.capitalize).mkString

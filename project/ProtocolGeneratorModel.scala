@@ -1,6 +1,6 @@
 package org.fomkin.cdt.build
 
-case class ProtocolGeneratorModel(domains: Seq[String],
+case class ProtocolGeneratorModel(domains: Map[String, ProtocolGeneratorModel.Meta],
                                   types: Seq[ProtocolGeneratorModel.TypeDef],
                                   commands: Seq[ProtocolGeneratorModel.CommandDef],
                                   events: Seq[ProtocolGeneratorModel.CommandDef])

@@ -1,4 +1,5 @@
 import Dependencies._
+import org.fomkin.cdt.build.ProtocolGenerator
 
 ThisBuild / scalaVersion     := "2.13.2"
 ThisBuild / version          := "0.1.0-SNAPSHOT"
@@ -17,9 +18,12 @@ lazy val core = project
       val browserProtocol = readData(browserProtocolFile)
       val errorOrModel = for (jsp <- jsProtocol; bp <- browserProtocol) yield
         processData(jsp.domains ++ bp.domains)
+      val renaming = ProtocolGenerator.Renaming(
+        types = Map("ApplicationCache" -> "ApplicationCacheInfo") // To avoid name conflict with ApplicationCache domain
+      )
       val model = errorOrModel match {
         case Left(error) => throw error
-        case Right(model) => renderModel(model)
+        case Right(model) => renderModel(model, renaming)
       }
       outDir.mkdirs()
       model.toSeq.map {

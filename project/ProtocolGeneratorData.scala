@@ -11,6 +11,7 @@ object ProtocolGeneratorData {
                     commands: Seq[Command] = Nil,
                     events: Seq[Command] = Nil,
                     deprecated: Boolean = false,
+                    experimental: Boolean = false,
                     dependencies: Seq[String] = Nil)
 
   case class Type(id: String,
