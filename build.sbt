@@ -1,6 +1,8 @@
 import Dependencies._
 import org.fomkin.cdt.build.ProtocolGenerator
 
+val Http4sVersion = "0.21.4"
+
 ThisBuild / scalaVersion     := "2.13.2"
 ThisBuild / version          := "0.1.0-SNAPSHOT"
 ThisBuild / organization     := "org.fomkin"
@@ -37,7 +39,13 @@ lazy val core = project
 
 lazy val http4s = project
   .in(file("interop/http4s"))
-  .settings(name := "chromedevtools-scala-http4s")
+  .settings(
+    libraryDependencies ++= Seq(
+      "org.http4s" %% "http4s-blaze-client" % Http4sVersion,
+      "org.http4s" %% "http4s-dsl"          % Http4sVersion,
+    ),
+    name := "chromedevtools-scala-http4s"
+  )
 
 lazy val circe = project
   .in(file("interop/circe"))

@@ -150,16 +150,42 @@ object ProtocolGenerator {
       aux(Nil, ns, decls.toVector)
     }
 
-    def renderTypeDecl(ns: String, td: Model.TypeDecl): String = td match {
-      case ref @ Model.TypeDecl.Ref(id) if usesJson(ns, ref) => s"${id.escape(renaming.types)}[Json]"
-      case Model.TypeDecl.Ref(id) => id.escape(renaming.types)
-      case Model.TypeDecl.Json => "Json"
-      case Model.TypeDecl.Array(t) => s"Seq[${renderTypeDecl(ns, t)}]"
-      case Model.TypeDecl.Primitive.String => "String"
-      case Model.TypeDecl.Primitive.Boolean => "Boolean"
-      case Model.TypeDecl.Primitive.Number => "Double"
-      case Model.TypeDecl.Primitive.Integer => "Int"
+    def renderStructReader(ns: String, props: Seq[Model.Property], json: String) = props
+      .map { p =>
+        val n = p.name.escape(renaming.properties)
+        val t = renderTypeDecl(ns, p.tpe, p.optional)
+        s"""$n = cdt.Codec[J, $t].unsafeRead(cdt.Json[J].unsafeGet($json, "$n"))"""
+      }
+      .mkString(",\n")
+
+    def renderPropsWriter(ns: String, props: Seq[Model.Property], prefix: String) = {
+      val s = props
+        .map { p =>
+          val n = p.name.escape(renaming.properties)
+          val t = renderTypeDecl(ns, p.tpe, p.optional)
+          s""""$n" -> cdt.Codec[J, $t].write($prefix.$n)"""
+        }
+        .mkString(",\n")
+      s"""cdt.Json[J].obj(
+         |  ${s.ident()}
+         |)""".stripMargin
     }
+
+    def renderTypeDecl(ns: String, td: Model.TypeDecl, optional: Boolean): String = {
+      val r = td match {
+        case ref @ Model.TypeDecl.Ref(id) if usesJson(ns, ref) => s"${id.escape(renaming.types)}[J]"
+        case Model.TypeDecl.Ref(id) => id.escape(renaming.types)
+        case Model.TypeDecl.Json => "J"
+        case Model.TypeDecl.Array(t) => s"Seq[${renderTypeDecl(ns, t, optional = false)}]"
+        case Model.TypeDecl.Primitive.String => "String"
+        case Model.TypeDecl.Primitive.Boolean => "Boolean"
+        case Model.TypeDecl.Primitive.Number => "Double"
+        case Model.TypeDecl.Primitive.Integer => "Int"
+      }
+      if (optional) s"Option[$r]"
+      else r
+    }
+
     def renderMeta(meta: Model.Meta, props: Seq[Model.Property], rets: Seq[Model.Property] = Nil) = {
       val params = props.map(x => x.name -> x.meta).toMap
       val exp =
@@ -217,12 +243,12 @@ object ProtocolGenerator {
           val methods = commands
             .map { commandDef =>
               val argsList = commandDef.params
-                .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe)}")
+                .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe, p.optional)}")
                 .mkString(", ")
               val returnsList = commandDef.returns match {
                 case Nil => "Unit"
-                case Seq(item) => renderTypeDecl(domain, item.tpe)
-                case xs => s"(${xs.map(_.tpe).map(renderTypeDecl(domain, _)).mkString(", ")})"
+                case Seq(item) => renderTypeDecl(domain, item.tpe, item.optional)
+                case xs => s"(${xs.map(p => renderTypeDecl(domain, p.tpe, p.optional)).mkString(", ")})"
               }
               val m = renderMeta(commandDef.meta, commandDef.params, commandDef.returns)
               s"${m}def ${commandDef.name.escape(renaming.commands)}($argsList): F[$returnsList]"
@@ -235,26 +261,63 @@ object ProtocolGenerator {
             .map {
               case Model.TypeDef.Struct(ns, id, xs, meta) =>
                 val argsList = xs
-                  .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe)}")
+                  .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe, p.optional)}")
                   .mkString(", ")
                 val typeParams =
-                  if (usesJson(ns, xs.map(_.tpe):_*)) "[Json]"
+                  if (usesJson(ns, xs.map(_.tpe):_*)) "[J]"
                   else ""
                 val m = renderMeta(meta, xs)
-                s"${m}case class ${id.escape(renaming.types)}$typeParams($argsList)"
+                val eid = id.escape(renaming.types)
+                val eidt = s"$eid$typeParams"
+                s"""${m}case class $eid$typeParams($argsList)
+                   |
+                   |object $eid {
+                   |  implicit def ${eid}Codec[J: cdt.Json]: cdt.Codec[J, $eidt] = new cdt.Codec[J, $eidt] {
+                   |    def unsafeRead(j: J): $eidt =
+                   |      $eid(
+                   |        ${renderStructReader(ns, xs, "j").ident(4)}
+                   |      )
+                   |    def write(v: $eidt): J =
+                   |      ${renderPropsWriter(ns, xs, "v").ident(3)}
+                   |  }
+                   |}""".stripMargin
               case Model.TypeDef.Enum(ns, id, xs, meta) =>
                 val caseObjects = xs
                   .map(_.capitalize)
                   .map(x => s"case object ${x.escape(renaming.properties)} extends ${id.escape(renaming.types)}")
                   .mkString("\n")
+                val readerCases = xs
+                  .map { x =>
+                    s"""case "$x" => ${x.capitalize.escape(renaming.properties)}"""
+                  }
+                  .mkString("\n")
+                val writerCases = xs
+                  .map { x =>
+                    s"""case ${x.capitalize.escape(renaming.properties)} => "$x""""
+                  }
+                  .mkString("\n")
                 val m = renderMeta(meta, Nil)
+                val eid = id.escape(renaming.types)
                 s"""${m}sealed trait ${id.escape(renaming.types)}
-                   |object ${id.escape(renaming.types)} {
-                   |  ${caseObjects.ident(1, "  ")}
+                   |object $eid {
+                   |  ${caseObjects.ident(1)}
+                   |
+                   |  implicit def ${eid}Codec[J: cdt.Json]: cdt.Codec[J, $eid] = new cdt.Codec[J, $eid] {
+                   |    def unsafeRead(j: J): $eid =
+                   |      cdt.Json[J].unsafeToString(j) match {
+                   |        ${readerCases.ident(4)}
+                   |      }
+                   |    def write(v: $eid): J = cdt.Json[J].string(
+                   |      v match {
+                   |        ${writerCases.ident(4)}
+                   |      }
+                   |    )
+                   |  }
                    |}""".stripMargin
               case Model.TypeDef.Alias(ns, id, decl, meta) =>
                 val m = renderMeta(meta, Nil)
-                s"${m}type $id = ${renderTypeDecl(ns, decl)}"
+                // TODO find out alias may be optional
+                s"${m}type $id = ${renderTypeDecl(ns, decl, optional = false)}"
             }
             .mkString("\n \n")
           val events = eventsByDomain
@@ -263,17 +326,22 @@ object ProtocolGenerator {
             .flatten
             .map { eventDef =>
               val argsList = eventDef.params
-                .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe)}")
+                .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe, p.optional)}")
                 .mkString(", ")
               val typeParams =
-                if (usesJson(eventDef.domain, eventDef.params.map(_.tpe):_*)) "[Json]"
+                if (usesJson(eventDef.domain, eventDef.params.map(_.tpe):_*)) "[J]"
                 else ""
               val m = renderMeta(eventDef.meta, eventDef.params)
               s"${m}case class ${eventDef.name.escape(renaming.events).capitalize}$typeParams($argsList) extends Event"
             }
             .mkString("\n \n")
           val m = renderMeta(model.domains(domain), Nil)
-          domain -> s"""${m}trait ${domain.escape(renaming.domains)}[F[_], Json] {
+          domain -> s"""package org.fomkin.cdt.protocol
+                       |
+                       |import org.fomkin.cdt
+                       |
+                       |${m}trait ${domain.escape(renaming.domains)}[F[_], J] {
+                       |
                        |  import ${domain.escape(renaming.domains)}._
                        |
                        |  ${methods.ident()}
