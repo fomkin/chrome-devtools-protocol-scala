@@ -111,7 +111,7 @@ object ProtocolGenerator {
     Model(domainsMetaMap, allTypes, commands, events)
   }
 
-  def renderModel(model: Model, renaming: Renaming): Map[String, String] = {
+  def renderModel(model: Model, renaming: Renaming): String = {
     val typeIndex = model
       .types
       .map(t => (t.qname, t))
@@ -152,9 +152,9 @@ object ProtocolGenerator {
 
     def renderStructReader(ns: String, props: Seq[Model.Property], json: String) = props
       .map { p =>
-        val n = p.name.escape(renaming.properties)
+        //val n = p.name.escape(renaming.properties)
         val t = renderTypeDecl(ns, p.tpe, p.optional)
-        s"""$n = cdt.Codec[J, $t].unsafeRead(cdt.Json[J].unsafeGet($json, "$n"))"""
+        s"""cdt.Codec[J, $t].unsafeRead(cdt.Json[J].unsafeGetNullable($json, "${p.name}"))"""
       }
       .mkString(",\n")
 
@@ -163,7 +163,7 @@ object ProtocolGenerator {
         .map { p =>
           val n = p.name.escape(renaming.properties)
           val t = renderTypeDecl(ns, p.tpe, p.optional)
-          s""""$n" -> cdt.Codec[J, $t].write($prefix.$n)"""
+          s""""$n" -> cdt.Codec[J, $t].write($prefix$n)"""
         }
         .mkString(",\n")
       s"""cdt.Json[J].obj(
@@ -232,10 +232,11 @@ object ProtocolGenerator {
       }
     }
 
+    val domains = model.commands.map(_.domain).distinct
     val typesByDomain = model.types.groupBy(_.domain)
     val eventsByDomain = model.events.groupBy(_.domain)
 
-    model
+    val domainsSources = model
       .commands
       .groupBy(_.domain)
       .map {
@@ -251,7 +252,15 @@ object ProtocolGenerator {
                 case xs => s"(${xs.map(p => renderTypeDecl(domain, p.tpe, p.optional)).mkString(", ")})"
               }
               val m = renderMeta(commandDef.meta, commandDef.params, commandDef.returns)
-              s"${m}def ${commandDef.name.escape(renaming.commands)}($argsList): F[$returnsList]"
+              s"""${m}def ${commandDef.name.escape(renaming.commands)}($argsList): F[$returnsList] =
+                 |  cr.runCommand(
+                 |    domain = "$domain",
+                 |    name = "${commandDef.name}",
+                 |    params = ${renderPropsWriter(domain, commandDef.params, "").ident(2)},
+                 |    mapResult = _returns => (
+                 |      ${renderStructReader(domain, commandDef.returns, "_returns").ident(3)}
+                 |    )
+                 |  )""".stripMargin
             }
             .mkString("\n \n")
           val types = typesByDomain
@@ -278,7 +287,7 @@ object ProtocolGenerator {
                    |        ${renderStructReader(ns, xs, "j").ident(4)}
                    |      )
                    |    def write(v: $eidt): J =
-                   |      ${renderPropsWriter(ns, xs, "v").ident(3)}
+                   |      ${renderPropsWriter(ns, xs, "v.").ident(3)}
                    |  }
                    |}""".stripMargin
               case Model.TypeDef.Enum(ns, id, xs, meta) =>
@@ -328,34 +337,63 @@ object ProtocolGenerator {
               val argsList = eventDef.params
                 .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe, p.optional)}")
                 .mkString(", ")
-              val typeParams =
-                if (usesJson(eventDef.domain, eventDef.params.map(_.tpe):_*)) "[J]"
-                else ""
               val m = renderMeta(eventDef.meta, eventDef.params)
-              s"${m}case class ${eventDef.name.escape(renaming.events).capitalize}$typeParams($argsList) extends Event"
+              if (usesJson(eventDef.domain, eventDef.params.map(_.tpe):_*)) {
+                s"${m}case class ${eventDef.name.escape(renaming.events).capitalize}[J]($argsList) extends Event[J]"
+              } else {
+                s"${m}case class ${eventDef.name.escape(renaming.events).capitalize}($argsList) extends Event[Nothing]"
+              }
             }
             .mkString("\n \n")
           val m = renderMeta(model.domains(domain), Nil)
-          domain -> s"""package org.fomkin.cdt.protocol
-                       |
-                       |import org.fomkin.cdt
-                       |
-                       |${m}trait ${domain.escape(renaming.domains)}[F[_], J] {
-                       |
-                       |  import ${domain.escape(renaming.domains)}._
-                       |
-                       |  ${methods.ident()}
-                       |}
-                       |
-                       |object ${domain.escape(renaming.domains)} {
-                       |  ${types.ident()}
-                       |
-                       |  sealed trait Event
-                       |  object Event {
-                       |    ${events.ident(2)}
-                       |  }
-                       |}""".stripMargin
+          s"""
+             |${m}final class ${domain.escape(renaming.domains)}[F[_], J: cdt.Json](cr: cdt.CommandRunner[F, J]) {
+             |
+             |  import ${domain.escape(renaming.domains)}._
+             |
+             |  ${methods.ident()}
+             |}
+             |
+             |object ${domain.escape(renaming.domains)} {
+             |  ${types.ident()}
+             |
+             |  sealed trait Event[+J] extends Protocol.Event[J]
+             |  object Event {
+             |    ${events.ident(2)}
+             |  }
+             |}""".stripMargin
       }
+      .mkString("\n\n")
+
+    val domainsInit = domains
+      .map { domain =>
+        val n = domain.escape(renaming.domains)
+        val uncapitalized = s"${n(0).toLower}${n.substring(1)}"
+        s"final val $uncapitalized: $n[F, J] = new $n(this)"
+      }
+      .mkString("\n")
+
+    s"""//-------------------------------------------------------
+       |// GENERATED FROM devtools-protocol/json/*
+       |// DO NOT EDIT!
+       |//-------------------------------------------------------
+       |
+       |package org.fomkin.cdt.protocol
+       |
+       |import org.fomkin.cdt
+       |
+       |$domainsSources
+       |
+       |abstract class Protocol[F[_], J: cdt. Json] extends cdt.CommandRunner[F, J] {
+       |
+       |  ${domainsInit.ident()}
+       |
+       |}
+       |
+       |object Protocol {
+       |  sealed trait Event[+J]
+       |}
+       |""".stripMargin
   }
 
   case class Renaming(domains: Map[String, String] = Map.empty,

@@ -12,7 +12,7 @@ object Codec {
 
   implicit def optionCodec[J: Json, T](implicit codec: Codec[J, T]): Codec[J, Option[T]] = new Codec[J, Option[T]] {
     def unsafeRead(j: J): Option[T] =
-      if (Json[J].unsafeIsNull(j)) None
+      if (Json[J].isNull(j)) None
       else Some(Codec[J, T].unsafeRead(j))
     def write(v: Option[T]): J = v match {
       case Some(x) => Codec[J, T].write(x)
@@ -51,5 +51,4 @@ object Codec {
     def unsafeRead(j: J): Boolean = Json[J].unsafeToBoolean(j)
     def write(v: Boolean): J = Json[J].boolean(v)
   }
-
 }

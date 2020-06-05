@@ -1,15 +1,21 @@
 import Dependencies._
 import org.fomkin.cdt.build.ProtocolGenerator
 
-val Http4sVersion = "0.21.4"
+val circeVersion = "0.13.0"
+val korolevVersion = "0.15.0-26-gaf02541-SNAPSHOT"
 
-ThisBuild / scalaVersion     := "2.13.2"
+ThisBuild / scalaVersion     := "2.13.1"
 ThisBuild / version          := "0.1.0-SNAPSHOT"
 ThisBuild / organization     := "org.fomkin"
 
+val commonSettings = Seq(
+  addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
+)
+
 lazy val core = project
+  .settings(commonSettings)
   .settings(
-    name := "chromedevtools-scala",
+    name := "cdt-scala-core",
     Compile / sourceGenerators += Def.task {
       import org.fomkin.cdt.build.ProtocolGenerator._
       val outDir = (Compile / sourceManaged).value / "org" / "fomkin" / "cdt" / "protocol"
@@ -28,31 +34,40 @@ lazy val core = project
         case Right(model) => renderModel(model, renaming)
       }
       outDir.mkdirs()
-      model.toSeq.map {
-        case (k, v) =>
-          val out = outDir / s"$k.scala"
-          IO.write(out, v)
-          out
-      }
-    }.taskValue
+      val f = outDir / "Protocol.scala"
+      IO.write(f, model)
+      Seq(f)
+    }.taskValue,
+    mappings in (Compile,packageSrc) := (managedSources in Compile).value map (s => (s,s.getName)),
   )
 
-lazy val http4s = project
-  .in(file("interop/http4s"))
+lazy val korolev = project
+  .in(file("interop/korolev"))
+  .settings(commonSettings)
   .settings(
     libraryDependencies ++= Seq(
-      "org.http4s" %% "http4s-blaze-client" % Http4sVersion,
-      "org.http4s" %% "http4s-dsl"          % Http4sVersion,
+      "com.github.fomkin" %% "korolev-http" % korolevVersion
     ),
-    name := "chromedevtools-scala-http4s"
+    name := "cdt-scala-korolev"
   )
+  .dependsOn(core)
 
 lazy val circe = project
   .in(file("interop/circe"))
-  .settings(name := "chromedevtools-scala-circe")
+  .settings(commonSettings)
+  .settings(
+    name := "cdt-scala-circe",
+    libraryDependencies ++= Seq(
+      "io.circe" %% "circe-core",
+      "io.circe" %% "circe-generic",
+      "io.circe" %% "circe-parser"
+    ).map(_ % circeVersion)
+  )
+  .dependsOn(core)
 
 lazy val chromedevtools = (project in file("."))
-  .aggregate(core, http4s, circe)
+  .settings(skip in publish := true)
+  .aggregate(core, korolev, circe)
 
 // Uncomment the following for publishing to Sonatype.
 // See https://www.scala-sbt.org/1.x/docs/Using-Sonatype.html for more detail.
