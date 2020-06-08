@@ -10,27 +10,27 @@ import korolev.http.HttpClient
 import korolev.http.protocol.WebSocketProtocol.Frame
 import korolev.web.Path
 import org.fomkin.cdt.protocol.Protocol
+import org.fomkin.cdt.protocol.Target.SessionID
 
 import scala.concurrent.ExecutionContext
 
-class KorolevCdtProtocol[F[_]: Effect, J: Json](send: String => F[Unit],
-                                                resultsTable: AsyncTable[F, Long, J]) extends Protocol[F, J] {
-
-  private val atomicLong = new AtomicLong(0L)
+class KorolevCdtProtocol[F[_]: Effect, J: Json](requestId: AtomicLong,
+                                                send: String => F[Unit],
+                                                resultsTable: AsyncTable[F, Long, J],
+                                                sessionID: Option[SessionID]) extends Protocol[F, J] {
 
   def runCommand[R](domain: String, name: String, params: J, mapResult: J => R): F[R] =
     for {
-      id <- Effect[F].delay(atomicLong.getAndIncrement())
-      _ <- send(
-        Json[J].stringify(
-          Json[J].obj(
-            "id" -> Json[J].long(id),
-            "method" -> Json[J].string(s"$domain.$name"),
-            "params" -> params
-          )
-        )
+      id <- Effect[F].delay(requestId.getAndIncrement())
+      request = Json[J].obj(
+        "id" -> Json[J].long(id),
+        "method" -> Json[J].string(s"$domain.$name"),
+        "params" -> params
       )
+      maybeWithSession = sessionID.fold(request)(id => Json[J].add(request, "sessionId", Json[J].string(id)))
+      _ <- send(Json[J].stringify(maybeWithSession))
       result <- resultsTable.get(id)
+      _ <- resultsTable.remove(id)
     } yield {
       try {
         mapResult(result)
@@ -39,6 +39,9 @@ class KorolevCdtProtocol[F[_]: Effect, J: Json](send: String => F[Unit],
           throw new Exception(s"Unable to parse result: $result", error)
       }
     }
+
+  def withSessionId(sessionId: SessionID): Protocol[F, J] =
+    new KorolevCdtProtocol[F, J](requestId, send, resultsTable, Some(sessionId))
 }
 
 object KorolevCdtProtocol {
@@ -67,6 +70,11 @@ object KorolevCdtProtocol {
             //println(s"unhandled stderr: $err")
         }
       ))
+      Runtime.getRuntime.addShutdownHook(new Thread() {
+        override def run(): Unit = {
+          process.destroy()
+        }
+      })
       process
     }
   }
@@ -108,11 +116,11 @@ object KorolevCdtProtocol {
       // TODO process events
       _ <- events
         .foreach { message =>
-          Effect[F].delay(println(Json[J].stringify(message)))
+          Effect[F].delay(println(s"event: ${Json[J].stringify(message)}"))
         }
         .start
     } yield {
-      new KorolevCdtProtocol(queue.offer, resultsTable)
+      new KorolevCdtProtocol(new AtomicLong(0L), queue.offer, resultsTable, None)
     }
   }
 }

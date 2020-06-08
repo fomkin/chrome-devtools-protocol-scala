@@ -162,19 +162,37 @@ object ProtocolGenerator {
       val s = props
         .map { p =>
           val n = p.name.escape(renaming.properties)
-          val t = renderTypeDecl(ns, p.tpe, p.optional)
-          s""""$n" -> cdt.Codec[J, $t].write($prefix$n)"""
+          val t = renderTypeDecl(ns, p.tpe, optional = false)
+          def writer(v: String) = s"""_props.append("$n" -> cdt.Codec[J, $t].write($v))""".stripMargin
+          if (p.optional) {
+            s"""$prefix$n match {
+               |  case Some(_v) => ${writer("_v")}
+               |  case None => ()
+               |}""".stripMargin
+          } else {
+            writer(s"$prefix$n")
+          }
         }
-        .mkString(",\n")
-      s"""cdt.Json[J].obj(
+        .mkString("\n")
+      s"""{
+         |  val _props = mutable.Buffer.empty[(String, J)]
          |  ${s.ident()}
-         |)""".stripMargin
+         |  cdt.Json[J].obj(_props.toVector:_*)
+         |}""".stripMargin
     }
 
     def renderTypeDecl(ns: String, td: Model.TypeDecl, optional: Boolean): String = {
+      def renderRef(id: String) = {
+        if (id.contains('.')) {
+          val Array(d, t) = id.split('.')
+          s"${d.escape(renaming.domains)}.${t.escape(renaming.types)}"
+        } else {
+          id.escape(renaming.types)
+        }
+      }
       val r = td match {
-        case ref @ Model.TypeDecl.Ref(id) if usesJson(ns, ref) => s"${id.escape(renaming.types)}[J]"
-        case Model.TypeDecl.Ref(id) => id.escape(renaming.types)
+        case ref @ Model.TypeDecl.Ref(id) if usesJson(ns, ref) => s"${renderRef(id)}[J]"
+        case Model.TypeDecl.Ref(id) => renderRef(id)
         case Model.TypeDecl.Json => "J"
         case Model.TypeDecl.Array(t) => s"Seq[${renderTypeDecl(ns, t, optional = false)}]"
         case Model.TypeDecl.Primitive.String => "String"
@@ -244,7 +262,13 @@ object ProtocolGenerator {
           val methods = commands
             .map { commandDef =>
               val argsList = commandDef.params
-                .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe, p.optional)}")
+                .map { p =>
+                  val rawT = renderTypeDecl(domain, p.tpe, p.optional)
+                  val t =
+                    if (p.optional) s"$rawT = None"
+                    else rawT
+                  s"${p.name.escape(renaming.properties)}: $t"
+                }
                 .mkString(", ")
               val returnsList = commandDef.returns match {
                 case Nil => "Unit"
@@ -380,6 +404,7 @@ object ProtocolGenerator {
        |
        |package org.fomkin.cdt.protocol
        |
+       |import scala.collection.mutable
        |import org.fomkin.cdt
        |
        |$domainsSources
@@ -388,6 +413,7 @@ object ProtocolGenerator {
        |
        |  ${domainsInit.ident()}
        |
+       |  def withSessionId(sessionId: Target.SessionID): Protocol[F, J]
        |}
        |
        |object Protocol {

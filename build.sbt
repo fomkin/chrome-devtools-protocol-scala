@@ -4,9 +4,10 @@ import org.fomkin.cdt.build.ProtocolGenerator
 val circeVersion = "0.13.0"
 val korolevVersion = "0.15.0-26-gaf02541-SNAPSHOT"
 
-ThisBuild / scalaVersion     := "2.13.1"
-ThisBuild / version          := "0.1.0-SNAPSHOT"
-ThisBuild / organization     := "org.fomkin"
+Global    / onChangedBuildSource := ReloadOnSourceChanges
+ThisBuild / scalaVersion         := "2.13.1"
+ThisBuild / version              := "0.1.0-SNAPSHOT"
+ThisBuild / organization         := "org.fomkin"
 
 val commonSettings = Seq(
   addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
@@ -27,6 +28,13 @@ lazy val core = project
       val errorOrModel = for (jsp <- jsProtocol; bp <- browserProtocol) yield
         processData(jsp.domains ++ bp.domains)
       val renaming = ProtocolGenerator.Renaming(
+        domains = Map(
+          "DOM" -> "Dom",
+          "DOMSnapshot" -> "DomSnapshot",
+          "DOMDebugger" -> "DomDebugger",
+          "DOMStorage" -> "DomStorage",
+          "CSS" -> "Css"
+        ),
         types = Map("ApplicationCache" -> "ApplicationCacheInfo") // To avoid name conflict with ApplicationCache domain
       )
       val model = errorOrModel match {

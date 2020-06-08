@@ -6,6 +6,7 @@ trait Json[T] {
   def unsafeParse(s: String): T
   def stringify(j: T): String
 
+  def add(obj: T, k: String, v: T): T
   def obj(items: (String,T)*): T
   def array(items: T*): T
   def string(s: String): T

@@ -13,6 +13,9 @@ final class CirceJson extends JsonT[Json] {
   def obj(items: (String, Json)*): Json =
     Json.obj(items:_*)
 
+  def add(obj: Json, k: String, v: Json): Json =
+    obj.asObject.fold(obj)(obj => Json.fromJsonObject(obj.add(k, v)))
+
   def array(items: Json*): Json =
     Json.arr(items:_*)
 
