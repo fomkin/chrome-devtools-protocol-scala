@@ -362,13 +362,27 @@ object ProtocolGenerator {
                 .map(p => s"${p.name.escape(renaming.properties)}: ${renderTypeDecl(domain, p.tpe, p.optional)}")
                 .mkString(", ")
               val m = renderMeta(eventDef.meta, eventDef.params)
-              if (usesJson(eventDef.domain, eventDef.params.map(_.tpe):_*)) {
-                s"${m}case class ${eventDef.name.escape(renaming.events).capitalize}[J]($argsList) extends Event[J]"
-              } else {
-                s"${m}case class ${eventDef.name.escape(renaming.events).capitalize}($argsList) extends Event[Nothing]"
-              }
+              val nc = eventDef.name.escape(renaming.events).capitalize
+              val (nct, ext) =
+                if (usesJson(eventDef.domain, eventDef.params.map(_.tpe):_*)) {
+                  (s"$nc[J]", "Event[J]")
+                } else {
+                  (nc, "Event[Nothing]")
+                }
+
+              s"""${m}case class $nct($argsList) extends $ext
+                 |object $nc {
+                 |  implicit def ${nc}Codec[J: cdt.Json]: cdt.Codec[J, $nct] = new cdt.Codec[J, $nct] {
+                 |    def unsafeRead(j: J): $nct =
+                 |      $nct(
+                 |        ${renderStructReader(domain, eventDef.params, "j").ident(4)}
+                 |      )
+                 |    def write(v: $nct): J =
+                 |      ${renderPropsWriter(domain, eventDef.params, "v.").ident(3)}
+                 |  }
+                 |}""".stripMargin
             }
-            .mkString("\n \n")
+            .mkString("\n\n")
           val m = renderMeta(model.domains(domain), Nil)
           s"""
              |${m}final class ${domain.escape(renaming.domains)}[F[_], J: cdt.Json](cr: cdt.CommandRunner[F, J]) {
@@ -397,6 +411,21 @@ object ProtocolGenerator {
       }
       .mkString("\n")
 
+    val eventParsers = eventsByDomain
+      .flatMap {
+        case (domain, eventDefs) =>
+          eventDefs.map { eventDef =>
+            val d = domain.escape(renaming.domains)
+            val n = eventDef.name.escape(renaming.commands)
+            val nc = n.capitalize
+            val j =
+              if (usesJson(domain, eventDef.params.map(_.tpe):_*)) "[J]"
+              else ""
+            s"""case "$d.$n" => cdt.Codec[J, $d.Event.$nc$j].unsafeRead(params)"""
+          }
+      }
+      .mkString("\n")
+
     s"""//-------------------------------------------------------
        |// GENERATED FROM devtools-protocol/json/*
        |// DO NOT EDIT!
@@ -417,6 +446,14 @@ object ProtocolGenerator {
        |}
        |
        |object Protocol {
+       |
+       |  def parseEvent[J: cdt.Json](message: J): Event[J] = {
+       |    val params = cdt.Json[J].unsafeGet(message, "params")
+       |    val method = cdt.Json[J].unsafeGet(message, "method")
+       |    cdt.Json[J].unsafeToString(method) match {
+       |      ${eventParsers.ident(3)}
+       |    }
+       |  }
        |  sealed trait Event[+J]
        |}
        |""".stripMargin

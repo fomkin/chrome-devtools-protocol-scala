@@ -4,7 +4,7 @@ import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
 
 import korolev.data.ByteVector
-import korolev.effect.{AsyncTable, Effect, Queue}
+import korolev.effect.{AsyncTable, Effect, Queue, Stream}
 import korolev.effect.syntax._
 import korolev.http.HttpClient
 import korolev.http.protocol.WebSocketProtocol.Frame
@@ -28,7 +28,9 @@ class KorolevCdtProtocol[F[_]: Effect, J: Json](requestId: AtomicLong,
         "params" -> params
       )
       maybeWithSession = sessionID.fold(request)(id => Json[J].add(request, "sessionId", Json[J].string(id)))
-      _ <- send(Json[J].stringify(maybeWithSession))
+      message = Json[J].stringify(maybeWithSession)
+      //_ = println(s"-> ${Console.BLUE}$message${Console.RESET}")
+      _ <- send(message)
       result <- resultsTable.get(id)
       _ <- resultsTable.remove(id)
     } yield {
@@ -79,7 +81,7 @@ object KorolevCdtProtocol {
     }
   }
 
-  def apply[F[_]: Effect, J: Json](uri: URI)(implicit ec: ExecutionContext): F[KorolevCdtProtocol[F, J]] = {
+  def apply[F[_]: Effect, J: Json](uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, J])] = {
     val resultsTable = AsyncTable.empty[F, Long, J]
     val queue = Queue[F, String]()
     val outgoing = queue.stream.map[Frame] { message => Frame.Text(ByteVector.utf8(message)) }
@@ -87,9 +89,10 @@ object KorolevCdtProtocol {
       response <- HttpClient.webSocket(uri.getHost, uri.getPort, Path.fromString(uri.getPath), outgoing)
       incoming = response.body.collect {
         case Frame.Text(message, _) =>
+          //println(s"<- ${Console.CYAN}${message.utf8String}${Console.RESET}")
           Json[J].unsafeParse(message.utf8String)
       }
-      List(commandResults, events) = incoming.sort(2) { message =>
+      List(commandResults, rawEvents) = incoming.sort(2) { message =>
         if (Json[J].get(message, "id").nonEmpty) 0 else 1
       }
       _ <- commandResults
@@ -113,14 +116,9 @@ object KorolevCdtProtocol {
           resultsTable.putEither(id, result)
         }
         .start
-      // TODO process events
-      _ <- events
-        .foreach { message =>
-          Effect[F].delay(println(s"event: ${Json[J].stringify(message)}"))
-        }
-        .start
     } yield {
-      new KorolevCdtProtocol(new AtomicLong(0L), queue.offer, resultsTable, None)
+      val events = rawEvents.map(message => Protocol.parseEvent(message))
+      (events, new KorolevCdtProtocol(new AtomicLong(0L), queue.offer, resultsTable, None))
     }
   }
 }

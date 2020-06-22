@@ -2,7 +2,7 @@ import Dependencies._
 import org.fomkin.cdt.build.ProtocolGenerator
 
 val circeVersion = "0.13.0"
-val korolevVersion = "0.15.0-26-gaf02541-SNAPSHOT"
+val korolevVersion = "0.16.0-RC1-20-g77655bc-SNAPSHOT"
 
 Global    / onChangedBuildSource := ReloadOnSourceChanges
 ThisBuild / scalaVersion         := "2.13.1"
@@ -54,7 +54,7 @@ lazy val korolev = project
   .settings(commonSettings)
   .settings(
     libraryDependencies ++= Seq(
-      "com.github.fomkin" %% "korolev-http" % korolevVersion
+      "org.fomkin" %% "korolev-http" % korolevVersion
     ),
     name := "cdt-scala-korolev"
   )
