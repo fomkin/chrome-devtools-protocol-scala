@@ -163,7 +163,7 @@ object ProtocolGenerator {
         .map { p =>
           val n = p.name.escape(renaming.properties)
           val t = renderTypeDecl(ns, p.tpe, optional = false)
-          def writer(v: String) = s"""_props.append("$n" -> cdt.Codec[J, $t].write($v))""".stripMargin
+          def writer(v: String) = s"""_props.append("${p.name}" -> cdt.Codec[J, $t].write($v))""".stripMargin
           if (p.optional) {
             s"""$prefix$n match {
                |  case Some(_v) => ${writer("_v")}

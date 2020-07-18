@@ -29,7 +29,7 @@ class KorolevCdtProtocol[F[_]: Effect, J: Json](requestId: AtomicLong,
       )
       maybeWithSession = sessionID.fold(request)(id => Json[J].add(request, "sessionId", Json[J].string(id)))
       message = Json[J].stringify(maybeWithSession)
-      //_ = println(s"-> ${Console.BLUE}$message${Console.RESET}")
+      _ = println(s"-> ${Console.BLUE}$message${Console.RESET}")
       _ <- send(message)
       result <- resultsTable.get(id)
       _ <- resultsTable.remove(id)
@@ -56,7 +56,7 @@ object KorolevCdtProtocol {
         if (headless) "--headless"
         else ""
       lazy val process: Process = s"$chromium $headlessFlag --remote-debugging-port=$port".run(ProcessLogger(
-        _ => (), {
+        out => println(s"${Console.YELLOW}$out${Console.RESET}"), {
           case s"DevTools listening on $uri" =>
             val join = Effect[F].promise[Int] { cb2 =>
                val thread = new Thread {
@@ -69,7 +69,7 @@ object KorolevCdtProtocol {
             }
             cb(Right((URI.create(uri), join)))
           case err =>
-            //println(s"unhandled stderr: $err")
+            println(s"${Console.RED}$err${Console.RESET}")
         }
       ))
       Runtime.getRuntime.addShutdownHook(new Thread() {
@@ -82,14 +82,14 @@ object KorolevCdtProtocol {
   }
 
   def apply[F[_]: Effect, J: Json](uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, J])] = {
-    val resultsTable = AsyncTable.empty[F, Long, J]
     val queue = Queue[F, String]()
     val outgoing = queue.stream.map[Frame] { message => Frame.Text(ByteVector.utf8(message)) }
     for {
+      resultsTable <- AsyncTable.empty[F, Long, J]
       response <- HttpClient.webSocket(uri.getHost, uri.getPort, Path.fromString(uri.getPath), outgoing)
       incoming = response.body.collect {
         case Frame.Text(message, _) =>
-          //println(s"<- ${Console.CYAN}${message.utf8String}${Console.RESET}")
+          println(s"<- ${Console.CYAN}${message.utf8String}${Console.RESET}")
           Json[J].unsafeParse(message.utf8String)
       }
       List(commandResults, rawEvents) = incoming.sort(2) { message =>
