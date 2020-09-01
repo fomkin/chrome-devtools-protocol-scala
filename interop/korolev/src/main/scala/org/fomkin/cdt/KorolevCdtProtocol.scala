@@ -3,7 +3,8 @@ package org.fomkin.cdt
 import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
 
-import korolev.data.ByteVector
+import korolev.data.BytesLike
+import korolev.data.syntax._
 import korolev.effect.{AsyncTable, Effect, Queue, Stream}
 import korolev.effect.syntax._
 import korolev.http.HttpClient
@@ -14,10 +15,10 @@ import org.fomkin.cdt.protocol.Target.SessionID
 
 import scala.concurrent.ExecutionContext
 
-class KorolevCdtProtocol[F[_]: Effect, J: Json](requestId: AtomicLong,
-                                                send: String => F[Unit],
-                                                resultsTable: AsyncTable[F, Long, J],
-                                                sessionID: Option[SessionID]) extends Protocol[F, J] {
+class KorolevCdtProtocol[F[_]: Effect, B: BytesLike, J: Json](requestId: AtomicLong,
+                                                              send: String => F[Unit],
+                                                              resultsTable: AsyncTable[F, Long, J],
+                                                              sessionID: Option[SessionID]) extends Protocol[F, J] {
 
   def runCommand[R](domain: String, name: String, params: J, mapResult: J => R): F[R] =
     for {
@@ -29,7 +30,7 @@ class KorolevCdtProtocol[F[_]: Effect, J: Json](requestId: AtomicLong,
       )
       maybeWithSession = sessionID.fold(request)(id => Json[J].add(request, "sessionId", Json[J].string(id)))
       message = Json[J].stringify(maybeWithSession)
-      _ = println(s"-> ${Console.BLUE}$message${Console.RESET}")
+      //_ = println(s"-> ${Console.BLUE}$message${Console.RESET}")
       _ <- send(message)
       result <- resultsTable.get(id)
       _ <- resultsTable.remove(id)
@@ -43,7 +44,7 @@ class KorolevCdtProtocol[F[_]: Effect, J: Json](requestId: AtomicLong,
     }
 
   def withSessionId(sessionId: SessionID): Protocol[F, J] =
-    new KorolevCdtProtocol[F, J](requestId, send, resultsTable, Some(sessionId))
+    new KorolevCdtProtocol[F, B, J](requestId, send, resultsTable, Some(sessionId))
 }
 
 object KorolevCdtProtocol {
@@ -81,16 +82,16 @@ object KorolevCdtProtocol {
     }
   }
 
-  def apply[F[_]: Effect, J: Json](uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, J])] = {
+  def apply[F[_]: Effect, B: BytesLike, J: Json](uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, B, J])] = {
     val queue = Queue[F, String]()
-    val outgoing = queue.stream.map[Frame] { message => Frame.Text(ByteVector.utf8(message)) }
+    val outgoing = queue.stream.map[Frame[B]] { message => Frame.Text(BytesLike[B].utf8(message)) }
     for {
       resultsTable <- AsyncTable.empty[F, Long, J]
-      response <- HttpClient.webSocket(uri.getHost, uri.getPort, Path.fromString(uri.getPath), outgoing)
+      response <- HttpClient.webSocket[F, B](uri.getHost, uri.getPort, Path.fromString(uri.getPath), outgoing)
       incoming = response.body.collect {
         case Frame.Text(message, _) =>
-          println(s"<- ${Console.CYAN}${message.utf8String}${Console.RESET}")
-          Json[J].unsafeParse(message.utf8String)
+          //println(s"<- ${Console.CYAN}${message.utf8String}${Console.RESET}")
+          Json[J].unsafeParse(message.asUtf8String)
       }
       List(commandResults, rawEvents) = incoming.sort(2) { message =>
         if (Json[J].get(message, "id").nonEmpty) 0 else 1

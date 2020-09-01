@@ -2,7 +2,7 @@ import Dependencies._
 import org.fomkin.cdt.build.ProtocolGenerator
 
 val circeVersion = "0.13.0"
-val korolevVersion = "0.16.0-RC1-22-g5ac6981-SNAPSHOT"
+val korolevVersion = "0.16.0-RC2-6-g238a7de-SNAPSHOT"
 
 Global    / onChangedBuildSource := ReloadOnSourceChanges
 ThisBuild / scalaVersion         := "2.13.1"
