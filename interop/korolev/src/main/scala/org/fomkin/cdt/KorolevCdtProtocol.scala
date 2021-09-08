@@ -2,23 +2,22 @@ package org.fomkin.cdt
 
 import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
-
 import korolev.data.BytesLike
 import korolev.data.syntax._
 import korolev.effect.{AsyncTable, Effect, Queue, Stream}
 import korolev.effect.syntax._
 import korolev.http.HttpClient
 import korolev.http.protocol.WebSocketProtocol.Frame
-import korolev.web.Path
+import korolev.web.{Path, PathAndQuery}
 import org.fomkin.cdt.protocol.Protocol
 import org.fomkin.cdt.protocol.Target.SessionID
 
 import scala.concurrent.ExecutionContext
 
-class KorolevCdtProtocol[F[_]: Effect, B: BytesLike, J: Json](requestId: AtomicLong,
-                                                              send: String => F[Unit],
-                                                              resultsTable: AsyncTable[F, Long, J],
-                                                              sessionID: Option[SessionID]) extends Protocol[F, J] {
+class KorolevCdtProtocol[F[_] : Effect, B: BytesLike, J: Json](requestId: AtomicLong,
+                                                               send: String => F[Unit],
+                                                               resultsTable: AsyncTable[F, Long, J],
+                                                               sessionID: Option[SessionID]) extends Protocol[F, J] {
 
   def runCommand[R](domain: String, name: String, params: J, mapResult: J => R): F[R] =
     for {
@@ -50,7 +49,7 @@ class KorolevCdtProtocol[F[_]: Effect, B: BytesLike, J: Json](requestId: AtomicL
 object KorolevCdtProtocol {
 
   // TODO rewrite this piece of shit
-  def runBrowser[F[_]: Effect](chromium: String = "chromium", port: Int = 9222, headless: Boolean = true): F[(URI, F[Int])] = {
+  def runBrowser[F[_] : Effect](chromium: String = "chromium", port: Int = 9222, headless: Boolean = true): F[(URI, F[Int])] = {
     Effect[F].promise { cb =>
       import sys.process._
       val headlessFlag =
@@ -60,7 +59,7 @@ object KorolevCdtProtocol {
         out => println(s"${Console.YELLOW}$out${Console.RESET}"), {
           case s"DevTools listening on $uri" =>
             val join = Effect[F].promise[Int] { cb2 =>
-               val thread = new Thread {
+              val thread = new Thread {
                 override def run(): Unit = {
                   val exitCode = process.exitValue()
                   cb2(Right(exitCode))
@@ -82,15 +81,15 @@ object KorolevCdtProtocol {
     }
   }
 
-  def apply[F[_]: Effect, B: BytesLike, J: Json](uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, B, J])] = {
+  def apply[F[_] : Effect, B: BytesLike, J: Json](uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, B, J])] = {
     val queue = Queue[F, String]()
     val outgoing = queue.stream.map[Frame[B]] { message => Frame.Text(BytesLike[B].utf8(message)) }
     for {
       resultsTable <- AsyncTable.empty[F, Long, J]
-      response <- HttpClient.webSocket[F, B](uri.getHost, uri.getPort, Path.fromString(uri.getPath), outgoing)
+      response <- HttpClient.webSocket[F, B](uri.getHost, uri.getPort, PathAndQuery.fromString(uri.getPath).asPath, outgoing)
       incoming = response.body.collect {
         case Frame.Text(message, _) =>
-          //println(s"<- ${Console.CYAN}${message.utf8String}${Console.RESET}")
+          println(s"<- ${Console.CYAN}${BytesLike[B].asUtf8String(message)}${Console.RESET}")
           Json[J].unsafeParse(message.asUtf8String)
       }
       List(commandResults, rawEvents) = incoming.sort(2) { message =>
@@ -119,7 +118,7 @@ object KorolevCdtProtocol {
         .start
     } yield {
       val events = rawEvents.map(message => Protocol.parseEvent(message))
-      (events, new KorolevCdtProtocol(new AtomicLong(0L), queue.offer, resultsTable, None))
+      (events, new KorolevCdtProtocol(new AtomicLong(0L), queue.enqueue, resultsTable, None))
     }
   }
 }

@@ -1,20 +1,37 @@
 import Dependencies._
 import org.fomkin.cdt.build.ProtocolGenerator
+import xerial.sbt.Sonatype._
+
+Global / onChangedBuildSource := ReloadOnSourceChanges
 
 val circeVersion = "0.13.0"
-val korolevVersion = "0.16.0-RC2-6-g238a7de-SNAPSHOT"
+val korolevVersion = "1.0.0"
 
-Global    / onChangedBuildSource := ReloadOnSourceChanges
-ThisBuild / scalaVersion         := "2.13.1"
-ThisBuild / version              := "0.1.0-SNAPSHOT"
-ThisBuild / organization         := "org.fomkin"
+val publishSettings = Seq(
+  publishTo := sonatypePublishTo.value,
+  Test / publishArtifact := false,
+  publishMavenStyle := true,
+  licenses := Seq("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0.txt")),
+  sonatypeProjectHosting := Some(GitHubHosting("fomkin", "chrome-devtools-protocol-scala", "Aleksey Fomkin", "aleksey.fomkin@gmail.com"))
+)
+
+val dontPublishSettings = Seq(
+  skip in publish := true,
+  publish := {},
+  publishArtifact := false,
+)
 
 val commonSettings = Seq(
-  addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
+  addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1"),
+  scalaVersion  := "2.13.6",
+  organization  := "org.fomkin",
+  git.useGitDescribe := true,
 )
 
 lazy val core = project
+  .enablePlugins(GitVersioning)
   .settings(commonSettings)
+  .settings(publishSettings: _*)
   .settings(
     name := "cdt-scala-core",
     Compile / sourceGenerators += Def.task {
@@ -51,7 +68,9 @@ lazy val core = project
 
 lazy val korolev = project
   .in(file("interop/korolev"))
+  .enablePlugins(GitVersioning)
   .settings(commonSettings)
+  .settings(publishSettings: _*)
   .settings(
     libraryDependencies ++= Seq(
       "org.fomkin" %% "korolev-http" % korolevVersion
@@ -62,7 +81,9 @@ lazy val korolev = project
 
 lazy val circe = project
   .in(file("interop/circe"))
+  .enablePlugins(GitVersioning)
   .settings(commonSettings)
+  .settings(publishSettings: _*)
   .settings(
     name := "cdt-scala-circe",
     libraryDependencies ++= Seq(
@@ -74,33 +95,5 @@ lazy val circe = project
   .dependsOn(core)
 
 lazy val chromedevtools = (project in file("."))
-  .settings(skip in publish := true)
+  .settings(dontPublishSettings)
   .aggregate(core, korolev, circe)
-
-// Uncomment the following for publishing to Sonatype.
-// See https://www.scala-sbt.org/1.x/docs/Using-Sonatype.html for more detail.
-
-// ThisBuild / description := "Some descripiton about your project."
-// ThisBuild / licenses    := List("Apache 2" -> new URL("http://www.apache.org/licenses/LICENSE-2.0.txt"))
-// ThisBuild / homepage    := Some(url("https://github.com/example/project"))
-// ThisBuild / scmInfo := Some(
-//   ScmInfo(
-//     url("https://github.com/your-account/your-project"),
-//     "scm:git@github.com:your-account/your-project.git"
-//   )
-// )
-// ThisBuild / developers := List(
-//   Developer(
-//     id    = "Your identifier",
-//     name  = "Your Name",
-//     email = "your@email",
-//     url   = url("http://your.url")
-//   )
-// )
-// ThisBuild / pomIncludeRepository := { _ => false }
-// ThisBuild / publishTo := {
-//   val nexus = "https://oss.sonatype.org/"
-//   if (isSnapshot.value) Some("snapshots" at nexus + "content/repositories/snapshots")
-//   else Some("releases" at nexus + "service/local/staging/deploy/maven2")
-// }
-// ThisBuild / publishMavenStyle := true
