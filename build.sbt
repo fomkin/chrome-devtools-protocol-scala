@@ -5,7 +5,7 @@ import xerial.sbt.Sonatype._
 Global / onChangedBuildSource := ReloadOnSourceChanges
 
 val circeVersion = "0.13.0"
-val korolevVersion = "1.0.0"
+val korolevVersion = "1.1.0"
 
 val publishSettings = Seq(
   publishTo := sonatypePublishTo.value,

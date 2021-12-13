@@ -1,17 +1,16 @@
 package org.fomkin.cdt
 
-import java.net.URI
-import java.util.concurrent.atomic.AtomicLong
 import korolev.data.BytesLike
 import korolev.data.syntax._
-import korolev.effect.{AsyncTable, Effect, Queue, Stream}
 import korolev.effect.syntax._
+import korolev.effect.{AsyncTable, Effect, Queue, Stream}
 import korolev.http.HttpClient
 import korolev.http.protocol.WebSocketProtocol.Frame
-import korolev.web.{Path, PathAndQuery}
 import org.fomkin.cdt.protocol.Protocol
 import org.fomkin.cdt.protocol.Target.SessionID
 
+import java.net.URI
+import java.util.concurrent.atomic.AtomicLong
 import scala.concurrent.ExecutionContext
 
 class KorolevCdtProtocol[F[_] : Effect, B: BytesLike, J: Json](requestId: AtomicLong,
@@ -81,15 +80,15 @@ object KorolevCdtProtocol {
     }
   }
 
-  def apply[F[_] : Effect, B: BytesLike, J: Json](uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, B, J])] = {
+  def apply[F[_] : Effect, B: BytesLike, J: Json](client: HttpClient[F, B], uri: URI)(implicit ec: ExecutionContext): F[(Stream[F, Protocol.Event[J]], KorolevCdtProtocol[F, B, J])] = {
     val queue = Queue[F, String]()
     val outgoing = queue.stream.map[Frame[B]] { message => Frame.Text(BytesLike[B].utf8(message)) }
     for {
       resultsTable <- AsyncTable.empty[F, Long, J]
-      response <- HttpClient.webSocket[F, B](uri.getHost, uri.getPort, PathAndQuery.fromString(uri.getPath).asPath, outgoing)
+      response <- client.webSocket(uri, outgoing, Map.empty, Map.empty)
       incoming = response.body.collect {
         case Frame.Text(message, _) =>
-          println(s"<- ${Console.CYAN}${BytesLike[B].asUtf8String(message)}${Console.RESET}")
+          //println(s"<- ${Console.CYAN}${BytesLike[B].asUtf8String(message)}${Console.RESET}")
           Json[J].unsafeParse(message.asUtf8String)
       }
       List(commandResults, rawEvents) = incoming.sort(2) { message =>
